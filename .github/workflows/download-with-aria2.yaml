@@ -16,33 +16,36 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install required tools
-        run: sudo apt-get update && sudo apt-get install -y aria2 zip
+        run: sudo apt-get update && sudo apt-get install -y aria2 zip jq
 
       - name: Extract and download with secret password
+        env:
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
         run: |
           MSG=$(git log -1 --pretty=%B)
           echo "Commit message: $MSG"
 
-          # استخراج دستور با فرمت: secret_name:zip_filename:url1 url2
+          # استخراج دستور
           if echo "$MSG" | grep -qP 'download-zip-secret:'; then
             COMMAND=$(echo "$MSG" | grep -oP 'download-zip-secret:\s*\K.*')
             
-            # تقسیم به سه بخش: secret_name | zip_filename | urls
             SECRET_NAME=$(echo "$COMMAND" | cut -d':' -f1)
             ZIP_NAME=$(echo "$COMMAND" | cut -d':' -f2)
             URL_LINE=$(echo "$COMMAND" | cut -d':' -f3-)
             
             echo "🔐 Using secret: $SECRET_NAME"
             echo "📛 Zip filename: $ZIP_NAME.zip"
-            echo "🌐 URLs: $URL_LINE"
             
-            # دریافت رمز از GitHub Secrets
-            PASSWORD="${{ secrets[SECRET_NAME] }}"
+            # دریافت رمز از secrets با استفاده از jq
+            PASSWORD=$(echo "$SECRETS_CONTEXT" | jq -r ".\"$SECRET_NAME\" // empty")
             
-            if [ -z "$PASSWORD" ]; then
+            if [ -z "$PASSWORD" ] || [ "$PASSWORD" = "null" ]; then
               echo "❌ Error: Secret '$SECRET_NAME' not found!"
               echo "💡 Make sure you've added this secret in:"
               echo "   Repository -> Settings -> Secrets and variables -> Actions"
+              echo ""
+              echo "📋 Current available secrets:"
+              echo "$SECRETS_CONTEXT" | jq -r 'keys[]' | sed 's/^/   - /'
               exit 1
             fi
             
@@ -50,27 +53,20 @@ jobs:
             
             # دانلود فایل‌ها
             for URL in $URL_LINE; do
-              FILENAME=$(basename "$URL")
               echo "⬇️ Downloading $URL"
-              aria2c \
-                --split=2 \
-                --max-connection-per-server=2 \
-                --min-split-size=90M \
-                --dir="tmp_downloads" \
-                "$URL"
+              aria2c --split=2 --max-connection-per-server=2 \
+                --min-split-size=90M --dir="tmp_downloads" "$URL"
             done
             
-            # ساخت zip رمزدار با نام دلخواه
+            # ساخت zip رمزدار
             cd tmp_downloads
             zip -j -P "$PASSWORD" "../downloads/${ZIP_NAME}.zip" *
             cd ..
             
-            echo "✅ Created password-protected zip: downloads/${ZIP_NAME}.zip"
-            
-            # پاک کردن فایل‌های موقت
+            echo "✅ Created: downloads/${ZIP_NAME}.zip"
             rm -rf tmp_downloads
           else
-            echo "❌ No download-zip-secret command found in commit message"
+            echo "❌ No download-zip-secret command found"
             exit 1
           fi
 
@@ -82,13 +78,11 @@ jobs:
           
           git add downloads/
           
-          if git diff --staged --quiet; then
+          if ! git diff --staged --quiet; then
+            git commit -m "Add encrypted zip file [skip ci]"
+            git pull --rebase origin "$BRANCH"
+            git push origin HEAD:"$BRANCH"
+            echo "🎉 Successfully pushed"
+          else
             echo "Nothing to commit"
-            exit 0
           fi
-          
-          git commit -m "Add password-protected zip file [skip ci]"
-          git pull --rebase origin "$BRANCH"
-          git push origin HEAD:"$BRANCH"
-          
-          echo "🎉 Successfully pushed encrypted zip file"
