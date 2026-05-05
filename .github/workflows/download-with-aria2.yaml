@@ -60,7 +60,7 @@ jobs:
             
             # ساخت zip رمزدار
             cd tmp_downloads
-            zip -j -P "$PASSWORD" "../downloads/${ZIP_NAME}.zip" *
+            zip -j -e -P "$PASSWORD" "../downloads/${ZIP_NAME}.zip" *
             cd ..
             
             echo "✅ Created: downloads/${ZIP_NAME}.zip"
